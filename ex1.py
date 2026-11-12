@@ -88,9 +88,6 @@ def run_certificates():
                     geometry=geom,
                     h=h,
                     S=factor,
-                    direct_rayleigh=rayleigh,
-                    assembly_error=assembly_error,
-                    basis_invariance_error=abs(factor - changed),
                 )
             )
     return certificates
@@ -276,7 +273,8 @@ def verify_pollution(data):
         numeric, _ = projector(p, operator_matrix(p, field), (0.25, -0.25))
         error = float(np.max(np.abs(np.array(P, float) - numeric)))
         assert error < 1e-11
-    cross = []
+    count = 0
+    maximum = 0.0
     for p in DEGREES:
         for family in ("tensor", "sharp", "cancel", "cancel_quadratic"):
             geom = "offset" if family == "tensor" else "uniform"
@@ -308,18 +306,10 @@ def verify_pollution(data):
             )
             relative = abs(theta - float(row["theta"])) / theta
             lowrel = abs(low - float(row["low"])) / low
-            cross.append(
-                dict(
-                    p=p,
-                    family=family,
-                    geometry=geom,
-                    h=h,
-                    theta_80=theta,
-                    relative_difference=relative,
-                    low_relative_difference=lowrel,
-                )
-            )
-            assert max(relative, lowrel) < 0.01
+            difference = max(relative, lowrel)
+            assert difference < 0.01
+            maximum = max(maximum, difference)
+            count += 1
             print("80-digit", p, family, relative, flush=True)
     minimum = min(
         ellipticity_bound(fields(fam, p), max(SCALES), geom)
@@ -328,12 +318,7 @@ def verify_pollution(data):
         for geom in ("uniform", "offset")
     )
     assert minimum > 0
-    maximum = max(
-        max(v["relative_difference"], v["low_relative_difference"]) for v in cross
-    )
-    print(
-        f"80-digit checks: {len(cross)} cases, maximum relative difference {maximum:.3g}"
-    )
+    print(f"80-digit checks: {count} cases, maximum relative difference {maximum:.3g}")
 
 
 def spectral(spectra, certificates):
@@ -388,7 +373,7 @@ def draw_pollution(rows):
             ax.set_ylim(0.052, 0.087)
             ax.yaxis.set_major_locator(FixedLocator([0.055, 0.065, 0.075, 0.085]))
             ax.yaxis.set_major_formatter(
-                FuncFormatter(lambda value, pos: "$" + format(value, ".3f") + "$")
+                FuncFormatter(lambda value, _pos: "$" + format(value, ".3f") + "$")
             )
             legend(ax, loc="center right", ncol=2, columnspacing=0.65)
         save(plt, fig, name)

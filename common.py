@@ -105,30 +105,29 @@ def update(name, value):
     DIAGNOSTICS[name] = max(DIAGNOSTICS.get(name, 0.0), float(value))
 
 
-def projector(p, op, c, check=True):
+def projector(p, op, c):
     J = jet(p, c) @ op
     Z = zero_basis(p, c)
     U = Z @ np.linalg.solve(J @ Z, np.eye(Z.shape[1]))
     P = np.eye(Z.shape[0]) - U @ J
-    if check:
-        update(
-            "jet_residual",
-            np.linalg.norm(J @ P) / (1 + np.linalg.norm(J) * np.linalg.norm(P)),
-        )
-        update("idempotence", np.linalg.norm(P @ P - P) / (1 + np.linalg.norm(P)))
+    update(
+        "jet_residual",
+        np.linalg.norm(J @ P) / (1 + np.linalg.norm(J) * np.linalg.norm(P)),
+    )
+    update("idempotence", np.linalg.norm(P @ P - P) / (1 + np.linalg.norm(P)))
 
-        nodes = np.linspace(-0.4, 0.4, p + 1)
-        bb = np.vstack(
-            (
-                basis_values(p, c[0], c[1] + nodes),
-                basis_values(p, c[0], c[1] + nodes, 1, 0),
-            )
+    nodes = np.linspace(-0.4, 0.4, p + 1)
+    bb = np.vstack(
+        (
+            basis_values(p, c[0], c[1] + nodes),
+            basis_values(p, c[0], c[1] + nodes, 1, 0),
         )
-        update(
-            "cauchy",
-            np.linalg.norm(bb @ (P - np.eye(len(P))))
-            / (1 + np.linalg.norm(bb) * np.linalg.norm(P)),
-        )
+    )
+    update(
+        "cauchy",
+        np.linalg.norm(bb @ (P - np.eye(len(P))))
+        / (1 + np.linalg.norm(bb) * np.linalg.norm(P)),
+    )
     return P, U
 
 
@@ -302,7 +301,7 @@ def maximum_quotient(numerator, denominator):
 
 
 def spectral_data(p, parts, geom):
-    a0, cc, dd = parts
+    a0, cc, _ = parts
     op0 = operator_matrix(p, a0)
     op1 = operator_matrix(p, cc)
     hh = harmonic_basis(p, a0)
@@ -319,10 +318,10 @@ def spectral_data(p, parts, geom):
     update("schur_identity", abs(kappa - full) / (1 + kappa))
     rank = np.linalg.matrix_rank(np.vstack(ww), tol=1e-11)
     assert rank <= 2
-    return hh, ww, gg, kappa, naive, rank
+    return hh, kappa, naive
 
 
-def with_rates(rows, keys, metrics, scale="h"):
+def with_rates(rows, keys, metrics):
     groups = {}
     for row in rows:
         groups.setdefault(tuple(row[k] for k in keys), []).append(row)
@@ -338,7 +337,7 @@ def with_rates(rows, keys, metrics, scale="h"):
                 ):
                     row[metric + "_rate"] = math.log(
                         previous[metric] / row[metric]
-                    ) / math.log(previous[scale] / row[scale])
+                    ) / math.log(previous["h"] / row["h"])
             previous = row
     return rows
 
@@ -358,7 +357,7 @@ def run_pollution(groups=POLLUTION_GROUPS, scales=SCALES):
     for p in DEGREES:
         for family, geom in groups:
             parts = fields(family, p)
-            hh, ww, g0, kappa, naive, rank = spectral_data(p, parts, geom)
+            hh, kappa, naive = spectral_data(p, parts, geom)
             spectra.append(
                 dict(
                     family=family,
@@ -366,34 +365,28 @@ def run_pollution(groups=POLLUTION_GROUPS, scales=SCALES):
                     geometry=geom,
                     kappa=kappa,
                     kappa_without_schur=naive,
-                    leading_rank=rank,
                 )
             )
+            root, children, _ = geometry(geom)
+            centers = [((r[0] + r[1]) / 2, (r[2] + r[3]) / 2) for r in children]
+            eye = np.eye(hh.shape[0])
             for h in scales:
                 field = combine(parts, h)
                 op = operator_matrix(p, field)
                 qq = projector(p, op, (0.0, 0.0))[0] @ hh
-                centers = [
-                    ((r[0] + r[1]) / 2, (r[2] + r[3]) / 2)
-                    for r in geometry(geom)[1]
-                ]
                 corrections = [
-                    (projector(p, op, c)[0] - np.eye(len(op))) @ qq for c in centers
+                    (projector(p, op, c)[0] - eye) @ qq for c in centers
                 ]
                 gg = (
-                    qq.T @ volume_gram(p, field, geometry(geom)[0], QUAD, True) @ qq
+                    qq.T @ volume_gram(p, field, root, QUAD, True) @ qq
                 )
                 num = energy(p, field, corrections, geom)
                 theta = maximum_quotient(num, gg)
                 low = maximum_quotient(num[:-2, :-2], gg[:-2, :-2])
-                rem = [delta - h * w for delta, w in zip(corrections, ww)]
-                linear_remainder = maximum_quotient(
-                    energy(p, parts[0], rem, geom), g0
-                )
                 theta_high = maximum_quotient(
                     energy(p, field, corrections, geom, QUAD + 3),
                     qq.T
-                    @ volume_gram(p, field, geometry(geom)[0], QUAD + 3, True)
+                    @ volume_gram(p, field, root, QUAD + 3, True)
                     @ qq,
                 )
                 update(
@@ -407,17 +400,12 @@ def run_pollution(groups=POLLUTION_GROUPS, scales=SCALES):
                         geometry=geom,
                         h=h,
                         theta=theta,
-                        theta_over_h=theta / h,
                         kappa=kappa,
-                        theta_minus_hkappa=abs(theta - h * kappa),
-                        linear_remainder=linear_remainder,
                         low=low,
                     )
                 )
             print("pollution", family, p, geom, flush=True)
-    return with_rates(
-        rows, ("family", "p", "geometry"), ("theta", "linear_remainder", "low")
-    ), spectra
+    return rows, spectra
 
 
 def coefficient_norm(matrix):
@@ -581,7 +569,7 @@ def line(ax, x, y, index, label, **kwargs):
     )
 
 
-def math_number(value, pos=None):
+def math_number(value, _pos=None):
     return "$" + format(value, "g") + "$"
 
 

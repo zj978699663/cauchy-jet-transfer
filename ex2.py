@@ -58,10 +58,11 @@ def run_cocycle_and_branch():
     directions = []
     branches = []
     for p in DEGREES:
-        field = combine(fields("tensor", p), 1.0)
+        parts = fields("tensor", p)
+        field = combine(parts, 1.0)
         op = operator_matrix(p, field)
 
-        hh = harmonic_basis(p, fields("tensor", p)[0])
+        hh = harmonic_basis(p, parts[0])
         source = projector(p, op, (0.0, 0.0))[0] @ hh
         source = np.linalg.qr(source, mode="reduced")[0]
         for beta in (0.0, 0.001, 0.1, 0.3):
@@ -78,8 +79,7 @@ def run_cocycle_and_branch():
                 remainder = coefficient_norm(defect - lead)
                 if beta == 0.0:
                     update("tangential", coefficient_norm(defect))
-                rank = np.linalg.matrix_rank(lead, tol=1e-11)
-                assert rank <= 1
+                assert np.linalg.matrix_rank(lead, tol=1e-11) <= 1
 
                 assert np.linalg.matrix_rank(defect, tol=1e-11) <= 2 * p - 3
                 directions.append(
@@ -87,7 +87,6 @@ def run_cocycle_and_branch():
                         p=p,
                         beta=beta,
                         h=h,
-                        defect=coefficient_norm(defect),
                         remainder=remainder,
                         directional_scaled=remainder
                         / (
@@ -97,7 +96,6 @@ def run_cocycle_and_branch():
                         )
                         if beta
                         else "",
-                        leading_rank=rank,
                     )
                 )
         for levels in (4, 8, 16):
@@ -115,22 +113,20 @@ def run_cocycle_and_branch():
                     successive = projector(p, op, current)[0] @ successive
                 direct = projector(p, op, current)[0] @ source
                 error = successive - direct
+                remainder = coefficient_norm(error - lead)
                 branches.append(
                     dict(
                         p=p,
                         L=levels,
                         h=h,
-                        s_path=s_path,
-                        discrepancy=coefficient_norm(error),
-                        remainder=coefficient_norm(error - lead),
-                        scaled_remainder=coefficient_norm(error - lead)
-                        / s_path**3,
+                        remainder=remainder,
+                        scaled_remainder=remainder / s_path**3,
                     )
                 )
         print("directions and branches", p, flush=True)
     return (
-        with_rates(directions, ("p", "beta"), ("defect", "remainder")),
-        with_rates(branches, ("p", "L"), ("discrepancy", "remainder")),
+        with_rates(directions, ("p", "beta"), ("remainder",)),
+        with_rates(branches, ("p", "L"), ("remainder",)),
     )
 
 
@@ -289,6 +285,7 @@ def main():
     rows, _ = run_pollution(groups, SCALES[-2:])
     directions, branches = run_cocycle_and_branch()
     check_diagnostics()
+    with_rates(rows, ("family", "p", "geometry"), ("theta", "low"))
     orders(rows, directions, branches)
     draw_remainders(directions, branches)
 
